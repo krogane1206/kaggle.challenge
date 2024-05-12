@@ -1,0 +1,75 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sun May 12 12:21:56 2024
+
+@author: excal
+"""
+
+import pandas as pd
+from matplotlib import pyplot as plt
+import seaborn as sns
+from ydata_profiling import ProfileReport
+
+train = pd.read_csv("train.csv")
+test = pd.read_csv("test.csv")
+
+#プロファイルレポートの作成　→　データの概要を大まかに把握する
+pr_df = ProfileReport(train)
+pr_df.to_file("report.html")
+
+print(train.shape)
+print(test.shape)
+
+#データの特徴　および　目的変数の要約統計量の確認
+train.describe()
+
+train.isnull().sum()
+test.isnull().sum()
+
+#データの前処理行程を行う
+train=train.replace({'male': 0, 'female': 1})
+test=test.replace({'male': 0, 'female': 1})
+
+train.loc[train['Age'].isnull(), 'Age'] = train.groupby('Pclass')['Age'].transform('median')
+test.loc[test['Age'].isnull(), 'Age'] = test.groupby('Pclass')['Age'].transform('median')
+
+train['Embarked'] = train['Embarked'].fillna(train['Embarked'].mode())
+test['Fare']=test['Fare'].fillna(test['Fare'].median())
+
+train['Title_tr'] = train['Name'].map(lambda x: x.split(', ')[1].split('. ')[0])
+train['Title_tr'] = train['Title_tr'].replace(['Dr','Rev','Mlle','Major','Col','the Countess','Capt','Ms','Sir','Lady','Mme','Don','Jonkheer'], 'Others')
+train['Title_tr'] = train['Title_tr'].map( {'Master': 0 , 'Miss':1 , 'Mr':2, 'Mrs':3, 'Others':4})
+
+test['Title_te'] = test['Name'].map(lambda x: x.split(', ')[1].split('. ')[0])
+test['Title_te'] = test['Title_te'].replace(['Col','Rev','Ms','Dr','Dona'], 'Others')
+test['Title_te'] = test['Title_te'].map( {'Master': 0 , 'Miss':1 , 'Mr':2, 'Mrs':3, 'Others':4})
+
+#ダミー変数の作成を行う。→ダミー変数化　加えて、元の学習データとデータフレームの連結を行って、train_add_dumを作成
+train_embarked_dum = pd.get_dummies(train['Embarked'], dtype='uint8')
+train_add_dum = pd.concat([train,train_embarked_dum], axis=1)
+train_add_dum.head()
+
+test_embarked_dum = pd.get_dummies(test['Embarked'], dtype='uint8')
+test_add_dum = pd.concat([test,test_embarked_dum], axis=1)
+test_add_dum.head()
+
+#学習モデル作成と予測の実施
+from sklearn.ensemble import RandomForestClassifier
+
+train_features = train_add_dum[['Pclass', 'Sex', 'Age', 'Fare', 'Title_tr', 'C', 'Q', 'S']].values
+train_target = train['Survived'].values
+
+model = RandomForestClassifier(n_estimators=150, max_depth=5, random_state=0)
+model.fit(train_features, train_target)
+
+#テストデータの特徴量を取得の上、作成したモデルで目的変数を予測
+test_features = test_add_dum[['Pclass', 'Sex', 'Age', 'Fare', 'Title_te', 'C', 'Q', 'S']].values
+predict_test_target = model.predict(test_features)
+
+#予測された目的変数データ　予測されたテストデータの中身をチェック
+predict_test_target.shape
+print(predict_test_target)
+
+#予測データの提出
+submission = pd.DataFrame({'PassengerId': test['PassengerId'], 'Survived': predict_test_target})
+submission.to_csv('submission_RandomForestClassifier_1.csv', index = False )
