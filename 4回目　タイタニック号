@@ -1,0 +1,122 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sun May 12 17:06:25 2024
+
+@author: excal
+"""
+
+import pandas as pd
+from matplotlib import pyplot as plt
+import seaborn as sns
+from ydata_profiling import ProfileReport
+
+train = pd.read_csv("train.csv")
+test = pd.read_csv("test.csv")
+
+#プロファイルレポートの作成　→　データの概要を大まかに把握する
+pr_df = ProfileReport(train)
+pr_df.to_file("report.html")
+
+print(train.shape)
+print(test.shape)
+
+#データの特徴　および　目的変数の要約統計量の確認
+train.describe()
+
+#データの欠損値を確認する
+train.isnull().sum()
+test.isnull().sum()
+
+#データの前処理について
+#男性と女性をそれぞれ、男性を０　と　女性を１　と置きます
+train = train.replace({'male': 0, 'female':1})
+test = test.replace({'male': 0, 'female':1})
+
+#学習データ　および　テストデータのAge（年齢）について、Pclass毎に、中央値で穴埋めします
+train.loc[train['Age'].isnull(),'Age']=train.groupby('Pclass')['Age'].transform('median')
+test.loc[test['Age'].isnull(),'Age']=test.groupby('Pclass')['Age'].transform('median')
+
+#学習データのEmbarkedの欠損値の2つを最頻値で穴埋めする
+train['Embarked']=train['Embarked'].fillna(train['Embarked'].mode())
+#テストデータのFareの欠損値の１つを中央値で穴埋めする
+test['Fare']=test['Fare'].fillna(test['Fare'].median())
+
+#敬称について、性別と年齢を推定ができると考える（仮説）
+train['Title_tr'] = train['Name'].map(lambda x: x.split(', ')[1].split(', ')[0])
+train['Title_tr'] = train['Title_tr'].replace(['Dr','Rev','Mlle','Major','Col','the Countess','Capt','Ms','Sir','Lady','Mme','Don','Jonkheer'], "Others")
+train['Title_tr'] = train['Title_tr'].map( {'Master': 0 , 'Miss':1 , 'Mr':2, 'Mrs':3, 'Others':4})
+print(train["Title_tr"])
+
+test['Title_te'] = test['Name'].map(lambda x: x.split(', ')[1].split('. ')[0])
+test['Title_te'] = test['Title_te'].replace(['Col','Rev','Ms','Dr','Dona'], 'Others')
+test['Title_te'] = test['Title_te'].map( {'Master': 0 , 'Miss':1 , 'Mr':2, 'Mrs':3, 'Others':4})
+
+#ダミー変数を作成する。また元の学習データとデータフレームを連結して、train_add_dumを作成して、結果を確認
+train_embarked_dum = pd.get_dummies(train['Embarked'], dtype='uint8')
+train_add_dum = pd.concat([train,train_embarked_dum], axis=1 )
+train_add_dum.head()
+
+#テストデータも同様に処理を行う
+test_embarked_dum = pd.get_dummies(test['Embarked'], dtype='uint8')
+test_add_dum = pd.concat([test,test_embarked_dum], axis=1 )
+test_add_dum.head()
+
+#こっから予測モデルの作成と予測の実施
+from sklearn.ensemble import RandomForestClassifier
+#学習データの特徴量　と　目的変数を取得
+train_features = train_add_dum[['Pclass', 'Sex', 'Age', 'Fare', 'Title_tr', 'C', 'Q', 'S']].values
+train_target = train['Survived'].values
+
+#学習データ　→　訓練用学習データ　および　評価用学習データへ分割。　目的変数　→　訓練要目的変数　および　評価用目的変数へ分割
+from sklearn.model_selection import train_test_split
+#学習データを訓練用学習データ　と　評価用学習データに分割　目的変数を訓練用目的変数　と　評価用目的変数に分割
+train_features_tr, train_features_va, train_target_tr, train_target_va = train_test_split(train_features, train_target, test_size = 0.2, random_state=0)
+#学習データ　と　目的変数を確認
+train_features_tr.shape
+train_features_va.shape
+train_target_tr.shape
+train_target_va.shape
+
+#グリッドサーチを行う
+#モデルのハイパーパラメーターをチューニングするために、
+#グリッドサーチ(GridSearchCV)をインポートする。
+#（ここでCVは、Cross Validation(交差検証)を意味）
+from sklearn.model_selection import GridSearchCV
+
+rf_model = RandomForestClassifier(random_state=0)
+
+#max_depthを以下の7つで試す
+max_depth = [4, 5, 6, 7, 8, 9, 10]
+
+#n_estimatorsを以下の5つで試す
+n_estimators = [120, 130, 140, 150, 160]
+
+#max_featuresを以下の3つで試す
+#max_featuresは、特徴変数の最大値を意味
+max_features = [6, 7, 8]
+
+params = {'max_depth':max_depth, 'n_estimators':n_estimators, 'max_features':max_features}
+
+#グリッドサーチで，上記ハイパーパラメータ組み合わせの7×5×3（105）通りを試す。
+#入力したデータを更に5分割(cv=5)し，その内4つを訓練用データに，1つを評価用データにして、
+#モデルを構築し，精度を出力することを5回繰り返す。
+#5回のスコアの平均値を，モデルのスコアとする（層化5分割交差検証）。
+grid_cv = GridSearchCV(estimator=rf_model, param_grid=params, cv=5)
+grid_cv.fit(train_features_tr, train_target_tr)
+
+#すべての組み合わせの内，最もスコアの高かった組み合わせと，そのスコアを表示する。
+display(grid_cv.best_params_, grid_cv.best_score_,
+        grid_cv.score(train_features_va, train_target_va))
+
+model = RandomForestClassifier(n_estimators = 130, max_depth=8, max_features=7, random_state=0)
+model.fit(train_features, train_target)
+
+#テストデータの特徴量を取得し、モデルで目的変数を予測
+test_features = test_add_dum[['Pclass', 'Sex', 'Age', 'Fare','Title_te', 'C', 'Q', 'S']].values
+predict_test_target = model.predict(test_features)
+
+predict_test_target.shape
+print(predict_test_target)
+
+submission = pd.DataFrame({'PassengerId': test['PassengerId'], 'Survived': predict_test_target})
+submission.to_csv('submission_RandomForestClassifier_2.csv', index = False )
